@@ -4,26 +4,22 @@ import com.example.addon.RobsAddon;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
-import meteordevelopment.meteorclient.systems.modules.Modules;
-import meteordevelopment.meteorclient.systems.modules.misc.AutoReconnect;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.orbit.EventHandler;
-import net.minecraft.core.component.DataComponents;
-import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.phys.Vec3;
 
 public class ElytraMapper extends Module {
 
-    private final SettingGroup sgAltitude  = settings.createGroup("Altitude");
-    private final SettingGroup sgDirection = settings.createGroup("Direction");
-    private final SettingGroup sgRockets   = settings.createGroup("Rockets");
-    private final SettingGroup sgPattern   = settings.createGroup("Pattern");
-    private final SettingGroup sgLogout    = settings.createGroup("Logout");
+    private final SettingGroup sgAltitude   = settings.createGroup("Altitude");
+    private final SettingGroup sgDirection  = settings.createGroup("Direction");
+    private final SettingGroup sgRockets    = settings.createGroup("Rockets");
+    private final SettingGroup sgPattern    = settings.createGroup("Pattern");
+    private final SettingGroup sgEquipment  = settings.createGroup("Equipment");
 
     // ── Altitude ─────────────────────────────────────────────────────────────
 
@@ -98,6 +94,23 @@ public class ElytraMapper extends Module {
         .build()
     );
 
+    private final Setting<Boolean> autoRestockRockets = sgRockets.add(new BoolSetting.Builder()
+        .name("auto-restock-rockets")
+        .description("Move rockets from inventory to hotbar when the hotbar supply runs low.")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<Integer> minRocketCount = sgRockets.add(new IntSetting.Builder()
+        .name("min-rocket-count")
+        .description("Restock hotbar rockets from inventory when total hotbar rocket count drops below this.")
+        .defaultValue(8)
+        .min(1)
+        .sliderRange(1, 64)
+        .visible(autoRestockRockets::get)
+        .build()
+    );
+
     // ── Pattern ───────────────────────────────────────────────────────────────
 
     private final Setting<Boolean> autoPattern = sgPattern.add(new BoolSetting.Builder()
@@ -129,7 +142,9 @@ public class ElytraMapper extends Module {
         .name("bound-min-x")
         .description("Western boundary (minimum X). Lane turns around here when flying West.")
         .defaultValue(-500)
-        .sliderRange(-10000, 10000)
+        .min(-30000000)
+        .max(30000000)
+        .sliderRange(-30000000, 30000000)
         .visible(() -> autoPattern.get() && patternMode.get() == PatternMode.BOUNDING_BOX)
         .build()
     );
@@ -138,7 +153,9 @@ public class ElytraMapper extends Module {
         .name("bound-max-x")
         .description("Eastern boundary (maximum X). Lane turns around here when flying East.")
         .defaultValue(500)
-        .sliderRange(-10000, 10000)
+        .min(-30000000)
+        .max(30000000)
+        .sliderRange(-30000000, 30000000)
         .visible(() -> autoPattern.get() && patternMode.get() == PatternMode.BOUNDING_BOX)
         .build()
     );
@@ -147,7 +164,9 @@ public class ElytraMapper extends Module {
         .name("bound-min-z")
         .description("Northern boundary (minimum Z). Lane turns around here when flying North.")
         .defaultValue(-500)
-        .sliderRange(-10000, 10000)
+        .min(-30000000)
+        .max(30000000)
+        .sliderRange(-30000000, 30000000)
         .visible(() -> autoPattern.get() && patternMode.get() == PatternMode.BOUNDING_BOX)
         .build()
     );
@@ -156,7 +175,9 @@ public class ElytraMapper extends Module {
         .name("bound-max-z")
         .description("Southern boundary (maximum Z). Lane turns around here when flying South.")
         .defaultValue(500)
-        .sliderRange(-10000, 10000)
+        .min(-30000000)
+        .max(30000000)
+        .sliderRange(-30000000, 30000000)
         .visible(() -> autoPattern.get() && patternMode.get() == PatternMode.BOUNDING_BOX)
         .build()
     );
@@ -179,38 +200,23 @@ public class ElytraMapper extends Module {
         .build()
     );
 
-    // ── Logout ───────────────────────────────────────────────────────────────
+    // ── Equipment ─────────────────────────────────────────────────────────────
 
-    private final Setting<Boolean> autoLogout = sgLogout.add(new BoolSetting.Builder()
-        .name("auto-logout")
-        .description("Disconnects from the server if you run out of rockets or have no elytra to swap to.")
-        .defaultValue(false)
-        .build()
-    );
-
-    private final Setting<Boolean> logoutNoRockets = sgLogout.add(new BoolSetting.Builder()
-        .name("logout-no-rockets")
-        .description("Disconnect if you run out of firework rockets while boosting.")
+    private final Setting<Boolean> autoSwapElytra = sgEquipment.add(new BoolSetting.Builder()
+        .name("auto-swap-elytra")
+        .description("Automatically equip a spare elytra when the current one's durability falls below the threshold.")
         .defaultValue(true)
-        .visible(autoLogout::get)
         .build()
     );
 
-    private final Setting<Boolean> logoutNoElytra = sgLogout.add(new BoolSetting.Builder()
-        .name("logout-no-elytra")
-        .description("Disconnect if your elytra is about to break and there is no spare one to swap to.")
-        .defaultValue(true)
-        .visible(autoLogout::get)
-        .build()
-    );
-
-    private final Setting<Integer> elytraDurabilityWarning = sgLogout.add(new IntSetting.Builder()
-        .name("elytra-durability-warning")
-        .description("Treat the equipped elytra as needing a swap once its remaining durability drops to this value.")
-        .defaultValue(5)
-        .min(0)
-        .sliderRange(0, 50)
-        .visible(() -> autoLogout.get() && logoutNoElytra.get())
+    private final Setting<Integer> minElytraDurability = sgEquipment.add(new IntSetting.Builder()
+        .name("min-elytra-durability")
+        .description("Durability percentage at which to swap to a spare elytra from hotbar or inventory.")
+        .defaultValue(10)
+        .min(1)
+        .max(99)
+        .sliderRange(1, 50)
+        .visible(autoSwapElytra::get)
         .build()
     );
 
@@ -221,7 +227,8 @@ public class ElytraMapper extends Module {
 
     private FlightPhase  flightPhase;
     private PatternPhase patternPhase;
-    private int    rocketTimer;
+    private int     rocketTimer;
+    private int     equipCheckTimer;
     private boolean laneFlipped;         // true when running back on a return lane
     private double  laneStartX, laneStartZ;
     private double  shiftStartX, shiftStartZ;
@@ -234,10 +241,11 @@ public class ElytraMapper extends Module {
     @Override
     public void onActivate() {
         if (mc.player == null) return;
-        flightPhase  = FlightPhase.CRUISING;
-        patternPhase = PatternPhase.FLYING;
-        rocketTimer  = 0;
-        laneFlipped  = false;
+        flightPhase      = FlightPhase.CRUISING;
+        patternPhase     = PatternPhase.FLYING;
+        rocketTimer      = 0;
+        equipCheckTimer  = 0;
+        laneFlipped      = false;
         laneStartX   = mc.player.getX();
         laneStartZ   = mc.player.getZ();
     }
@@ -254,11 +262,6 @@ public class ElytraMapper extends Module {
     @EventHandler
     private void onTick(TickEvent.Pre event) {
         if (mc.player == null || !mc.player.isFallFlying()) return;
-
-        if (autoLogout.get() && logoutNoElytra.get() && !hasElytraToSwapTo()) {
-            disconnect("No elytra left to swap to.");
-            return;
-        }
 
         double y = mc.player.getY();
 
@@ -278,12 +281,8 @@ public class ElytraMapper extends Module {
         // Rockets
         if (flightPhase == FlightPhase.BOOSTING && autoRocket.get()) {
             if (rocketTimer <= 0) {
-                if (fireRocket()) {
-                    rocketTimer = rocketInterval.get() * 20;
-                } else if (autoLogout.get() && logoutNoRockets.get()) {
-                    disconnect("Out of firework rockets.");
-                    return;
-                }
+                fireRocket();
+                rocketTimer = rocketInterval.get() * 20;
             } else {
                 rocketTimer--;
             }
@@ -294,6 +293,12 @@ public class ElytraMapper extends Module {
             tickPattern();
         } else if (lockYaw.get()) {
             applyYaw(currentLaneYaw());
+        }
+
+        // Equipment checks (elytra durability + rocket restock) — once per second
+        if (--equipCheckTimer <= 0) {
+            equipCheckTimer = 20;
+            checkEquipment();
         }
     }
 
@@ -313,7 +318,10 @@ public class ElytraMapper extends Module {
         } else { // SHIFTING
             CardinalDir sweep = sweepCardinal();
             if (lockYaw.get()) applyYaw(dirToYaw(sweep));
-            if (shiftProgress(x, z, sweep) >= laneSpacing.get()) {
+            boolean doneShifting = shiftProgress(x, z, sweep) >= laneSpacing.get();
+            if (!doneShifting && patternMode.get() == PatternMode.BOUNDING_BOX)
+                doneShifting = atBound(x, z, sweep);
+            if (doneShifting) {
                 laneFlipped  = !laneFlipped;
                 laneStartX   = x;
                 laneStartZ   = z;
@@ -327,11 +335,27 @@ public class ElytraMapper extends Module {
             return laneProgress(x, z) >= laneLength.get();
         }
         CardinalDir dir = laneFlipped ? opposite(laneDirection.get()) : laneDirection.get();
+        // Use velocity lookahead (3 ticks) so fast elytra flight doesn't overshoot the boundary
+        Vec3 vel = mc.player.getDeltaMovement();
+        double px = x + vel.x * 3;
+        double pz = z + vel.z * 3;
         return switch (dir) {
-            case EAST  -> x >= boundMaxX.get();
-            case WEST  -> x <= boundMinX.get();
-            case SOUTH -> z >= boundMaxZ.get();
-            case NORTH -> z <= boundMinZ.get();
+            case EAST  -> px >= boundMaxX.get();
+            case WEST  -> px <= boundMinX.get();
+            case SOUTH -> pz >= boundMaxZ.get();
+            case NORTH -> pz <= boundMinZ.get();
+        };
+    }
+
+    private boolean atBound(double x, double z, CardinalDir dir) {
+        Vec3 vel = mc.player.getDeltaMovement();
+        double px = x + vel.x * 3;
+        double pz = z + vel.z * 3;
+        return switch (dir) {
+            case EAST  -> px >= boundMaxX.get();
+            case WEST  -> px <= boundMinX.get();
+            case SOUTH -> pz >= boundMaxZ.get();
+            case NORTH -> pz <= boundMinZ.get();
         };
     }
 
@@ -393,45 +417,69 @@ public class ElytraMapper extends Module {
         mc.player.setYHeadRot(yaw);
     }
 
-    private boolean fireRocket() {
-        if (mc.player == null) return false;
+    // ── Equipment management ──────────────────────────────────────────────────
+
+    private void checkEquipment() {
+        if (autoSwapElytra.get())      checkElytra();
+        if (autoRestockRockets.get())  checkRockets();
+    }
+
+    private void checkElytra() {
+        ItemStack current = mc.player.getItemBySlot(EquipmentSlot.CHEST);
+        if (current.getItem() != Items.ELYTRA || current.getMaxDamage() == 0) return;
+        float currentPct = (1f - (float) current.getDamageValue() / current.getMaxDamage()) * 100f;
+        if (currentPct > minElytraDurability.get()) return;
+
+        // Search all inventory slots — InvUtils.move handles index→container-ID conversion
+        // and cursor cleanup automatically. toArmor(2) = chest slot. (0=feet,1=legs,2=chest,3=head)
+        for (int i = 0; i < 36; i++) {
+            if (isSpareElytra(mc.player.getInventory().getItem(i), currentPct)) {
+                InvUtils.move().from(i).toArmor(2);
+                return;
+            }
+        }
+    }
+
+    private boolean isSpareElytra(ItemStack stack, float worseThanPct) {
+        if (stack.getItem() != Items.ELYTRA || stack.getMaxDamage() == 0) return false;
+        float pct = (1f - (float) stack.getDamageValue() / stack.getMaxDamage()) * 100f;
+        return pct > worseThanPct;
+    }
+
+    private void checkRockets() {
+        int total = 0;
+        for (int i = 0; i < 9; i++) {
+            ItemStack s = mc.player.getInventory().getItem(i);
+            if (s.getItem() == Items.FIREWORK_ROCKET) total += s.getCount();
+        }
+        if (total >= minRocketCount.get()) return;
+
+        // Target: prefer a hotbar slot with an existing partial stack; fall back to an empty slot
+        int target = -1;
+        for (int i = 0; i < 9 && target == -1; i++) {
+            if (mc.player.getInventory().getItem(i).getItem() == Items.FIREWORK_ROCKET) target = i;
+        }
+        for (int i = 0; i < 9 && target == -1; i++) {
+            if (mc.player.getInventory().getItem(i).isEmpty()) target = i;
+        }
+        if (target == -1) return;
+
+        // Move inventory stack to target hotbar slot — InvUtils deposits any cursor overflow back
+        for (int i = 9; i < 36; i++) {
+            if (mc.player.getInventory().getItem(i).getItem() == Items.FIREWORK_ROCKET) {
+                InvUtils.move().from(i).to(target);
+                return;
+            }
+        }
+    }
+
+    private void fireRocket() {
+        if (mc.player == null) return;
         FindItemResult rocket = InvUtils.findInHotbar(Items.FIREWORK_ROCKET);
-        if (!rocket.found()) return false;
+        if (!rocket.found()) return;
         InvUtils.swap(rocket.slot(), true);
         mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
         InvUtils.swapBack();
-        return true;
-    }
-
-    private boolean hasElytraToSwapTo() {
-        ItemStack chest = mc.player.getItemBySlot(EquipmentSlot.CHEST);
-        if (chest.has(DataComponents.GLIDER) && remainingDurability(chest) > elytraDurabilityWarning.get()) return true;
-
-        for (ItemStack stack : mc.player.getInventory().getNonEquipmentItems()) {
-            if (stack.has(DataComponents.GLIDER) && remainingDurability(stack) > elytraDurabilityWarning.get()) return true;
-        }
-
-        return false;
-    }
-
-    private int remainingDurability(ItemStack stack) {
-        if (stack.isEmpty()) return 0;
-        return stack.getMaxDamage() - stack.getDamageValue();
-    }
-
-    private void disconnect(String reason) {
-        MutableComponent text = Component.literal("[" + title + "] " + reason);
-
-        AutoReconnect autoReconnect = Modules.get().get(AutoReconnect.class);
-        if (autoReconnect.isActive()) {
-            text.append(" AutoReconnect was disabled so it wouldn't fly straight back into the same problem.");
-            autoReconnect.toggle();
-        }
-
-        // Toggle off so re-logging in doesn't immediately re-trigger this same disconnect.
-        toggle();
-
-        mc.getConnection().getConnection().disconnect(text);
     }
 
     public enum CardinalDir { NORTH, SOUTH, EAST, WEST }
